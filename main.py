@@ -1,7 +1,48 @@
-# --- ROTA PRINCIPAL DE EXTRAÇÃO ---
+import asyncio
+import re
+from bs4 import BeautifulSoup
+from fastapi import FastAPI, HTTPException
+import httpx
+import yt_dlp
+
+# --- 1. CRIAÇÃO DA INSTÂNCIA DA APLICAÇÃO (OBRIGATÓRIO) ---
+app = FastAPI()
+
+# URL da sua API na Koyeb para o Self-Ping
+KOYEB_APP_URL = "https://continuous-jan-limastudio-5d9efa38.koyeb.app/"
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+# --- 2. SERVIÇO ANTI-SLEEP (SELF-PING) ---
+async def self_ping_koyeb():
+    await asyncio.sleep(30)
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                response = await client.get(KOYEB_APP_URL)
+                print(f"[Anti-Sleep] Self-Ping status: {response.status_code}")
+            except Exception as e:
+                print(f"[Anti-Sleep] Erro no Self-Ping: {e}")
+            await asyncio.sleep(300)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(self_ping_koyeb())
+
+# --- 3. ROTA RAIZ ---
+@app.get("/")
+def read_root():
+    return {"status": "online", "message": "API Extratora Ativa"}
+
+# --- 4. ROTA PRINCIPAL DE EXTRAÇÃO ---
 @app.get("/extract")
 async def extract_video(url: str):
-    # 1. TRATAMENTO ESPECÍFICO PARA THEPORNBANG
+    # TRATAMENTO ESPECÍFICO PARA THEPORNBANG
     if "thepornbang.com" in url:
         try:
             async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
@@ -12,10 +53,8 @@ async def extract_video(url: str):
                 html = res.text
                 result = {"720p": "", "1080p": "", "1440p": "", "2160p": ""}
 
-                # Padrão 1: Procura por urls diretas de vídeo no HTML (mp4 / get_stream)
                 stream_matches = re.findall(r'https?://[^\s\'"]+/get_stream/[^\s\'"]+', html)
                 if not stream_matches:
-                    # Tenta capturar URLs .mp4 gerais dentro do código fonte/scripts
                     stream_matches = re.findall(r'https?://[^\s\'"]+\.mp4[^\s\'"]*', html)
 
                 if stream_matches:
@@ -28,9 +67,7 @@ async def extract_video(url: str):
                         elif not result["1080p"]:
                             result["1080p"] = clean_url
 
-                # Padrão 2: Fallback via API do OK.ru (Procura por IDs do OK.ru no HTML)
                 if not result["1080p"] and not result["720p"]:
-                    # Busca por padrões como ok.ru/videoembed/NUMEROS ou vids=NUMEROS
                     ok_id_match = re.search(r'(?:ok\.ru/videoembed/|vids=)(\d+)', html)
                     if ok_id_match:
                         vid_id = ok_id_match.group(1)
@@ -52,7 +89,7 @@ async def extract_video(url: str):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Erro ao extrair: {str(e)}")
 
-    # 2. TRATAMENTO PADRÃO VIA YT-DLP (VK, YOUTUBE, ETC)
+    # TRATAMENTO PADRÃO VIA YT-DLP (VK, YOUTUBE, ETC)
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -81,3 +118,31 @@ async def extract_video(url: str):
             return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# --- 5. ROTA DE EXTRAÇÃO DO MEDIAFIRE ---
+@app.get("/mediafire")
+async def extract_mediafire(url: str):
+    try:
+        if "download" in url and "mediafire.com" in url:
+            file_key = url.split("/")[-2] if url.endswith("/") else url.split("/")[-1]
+            if ".mp4" in file_key:
+                file_key = url.split("/")[-2]
+            url = f"https://www.mediafire.com/file/{file_key}"
+
+        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=10.0) as client:
+            response = await client.get(url)
+
+            if response.status_code != 200:
+                raise HTTPException(status_code=400, detail="Não foi possível acessar a página do MediaFire.")
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            download_btn = soup.find("a", {"id": "downloadButton"})
+
+            if download_btn and download_btn.get("href"):
+                direct_url = download_btn["href"]
+                return {"direct_url": direct_url, "1080p": direct_url}
+            else:
+                raise HTTPException(status_code=404, detail="Link de download não encontrado na página.")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
