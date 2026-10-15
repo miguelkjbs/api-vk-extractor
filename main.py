@@ -18,7 +18,7 @@ app = FastAPI()
 
 # URL da sua API na Koyeb para o Self-Ping
 
-KOYEB_APP_URL = "https://fuzzy-deeanne-limastudio-4adff775.koyeb.app/"
+KOYEB_APP_URL = "https://api-vk-extractor.onrender.com"
 
 
 
